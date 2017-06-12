@@ -11,19 +11,22 @@
 #-------------------------------------------------------------------------------
 
 # TODO: use another DB if subs are not found on subDB
+
 import hashlib
-import os
-import shutil 
-import sys
 import logging
-import requests,time,re,zipfile
+import os
+import shutil
+import sys
+import zipfile
+from time import sleep
 from bs4 import BeautifulSoup
+from requests import get
+
 PY_VERSION = sys.version_info[0]
 if PY_VERSION == 2:
-    import urllib2
+    from urllib2 import Request, urlopen
 if PY_VERSION == 3:
-    import urllib.request
-
+    from urllib.request import Request, urlopen
 
 def get_hash(file_path):
     read_size = 64 * 1024
@@ -43,21 +46,29 @@ def sub_downloader(file_path):
             return
 
         if not os.path.exists(root + ".srt"):
-            headers = {'User-Agent': 'SubDB/1.0 (subtitle-downloader/1.0; http://github.com/manojmj92/subtitle-downloader)'}
-            url = "http://api.thesubdb.com/?action=download&hash=" + get_hash(file_path) + "&language=en"
-            if PY_VERSION == 3:
-                req = urllib.request.Request(url, None, headers)
-                response = urllib.request.urlopen(req).read()
-            if PY_VERSION == 2:
-                req = urllib2.Request(url, '', headers)
-                response = urllib2.urlopen(req).read()
+            response = get_subtitles_from_subdb(file_path)
+            write_subtitles_to_disk(file_path, response, root)
 
-            with open(root + ".srt", "wb") as subtitle:
-                subtitle.write(response)
-                logging.info("Subtitle successfully downloaded for " + file_path)
-    except:
-        #download subs from subscene if not found in subdb  
-        sub_downloader2(file_path)
+    except Exception as e:
+        print(e)
+        # download subs from subscene if not found in subdb
+        #sub_downloader2(file_path)
+
+
+def write_subtitles_to_disk(file_path, response, root):
+    with open(root + ".srt", "wb") as subtitle:
+        subtitle.write(response)
+        logging.info("Subtitle successfully downloaded for " + file_path)
+
+
+def get_subtitles_from_subdb(file_path):
+    headers = {'User-Agent': 'SubDB/1.0 (subtitle-downloader/1.0; http://github.com/manojmj92/subtitle-downloader)'}
+    url = "http://api.thesubdb.com/?action=download&hash=" + get_hash(file_path) + "&language=en"
+    request = Request(url, "", headers)
+    response = urlopen(request).read()
+    return response
+
+
 def sub_downloader2(file_path):
     try:
         root, extension = os.path.splitext(file_path)
@@ -73,7 +84,7 @@ def sub_downloader2(file_path):
                 break
         root=root2[j+1:]
         root2=root2[:j+1]
-        r=requests.get("http://subscene.com/subtitles/release?q="+root);
+        r= get("http://subscene.com/subtitles/release?q=" + root);
         soup=BeautifulSoup(r.content,"lxml")
         atags=soup.find_all("a")
         href=""
@@ -82,16 +93,16 @@ def sub_downloader2(file_path):
             if(len(spans)==2 and spans[0].get_text().strip()=="English"):
                 href=atags[i].get("href").strip()               
         if(len(href)>0):
-            r=requests.get("http://subscene.com"+href);
+            r= get("http://subscene.com" + href);
             soup=BeautifulSoup(r.content,"lxml")
             lin=soup.find_all('a',attrs={'id':'downloadButton'})[0].get("href")
-            r=requests.get("http://subscene.com"+lin);
+            r= get("http://subscene.com" + lin);
             soup=BeautifulSoup(r.content,"lxml")
             subfile=open(root2+".zip", 'wb')
             for chunk in r.iter_content(100000):
                 subfile.write(chunk)
                 subfile.close()
-                time.sleep(1)
+                sleep(1)
                 zip=zipfile.ZipFile(root2+".zip")
                 zip.extractall(root2)
                 zip.close()
@@ -104,24 +115,37 @@ def sub_downloader2(file_path):
         logging.error("Error in fetching subtitle for " + file_path + str(sys.exc_info()))
 
 
-def main():
-    root, _ = os.path.splitext(sys.argv[0])
+def main(arguments):
+    root, _ = os.path.splitext(arguments[0])
     logging.basicConfig(filename=root + '.log', level=logging.INFO)
     logging.info("Started with params " + str(sys.argv))
 
-    if len(sys.argv) == 1:
-        print("This program requires at least one parameter")
-        sys.exit(1)
+    videos_names = parse_video_names(arguments)
+    for video in videos_names:
+        print(video)
+        sub_downloader(video)
 
-    for path in sys.argv:
+
+def parse_video_names(args):
+    videos_names = []
+    for path in args:
         if os.path.isdir(path):
             # Iterate the root directory recursively using os.walk and for each video file present get the subtitle
             for dir_path, _, file_names in os.walk(path):
                 for filename in file_names:
                     file_path = os.path.join(dir_path, filename)
-                    sub_downloader(file_path)
+                    videos_names.append(file_path)
+
         else:
-            sub_downloader(path)
+            videos_names.append(path)
+
+    return videos_names
+
 
 if __name__ == '__main__':
-    main()
+
+    if len(sys.argv) == 1:
+        print("This program requires at least one parameter")
+        sys.exit(1)
+
+    main(sys.argv)
